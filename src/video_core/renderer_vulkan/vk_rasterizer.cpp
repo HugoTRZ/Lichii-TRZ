@@ -67,6 +67,7 @@
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_draw_runs.h"
+#include "common/nx2_sample_profile.h"
 #include "video_core/nx2_fast_draw.h"
 #include "video_core/nx2_profile.h"
 
@@ -628,7 +629,8 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         gpu.InvalidateGPUCache();
     }
     namespace FastDraw = VideoCommon::Nx2FastDraw;
-    const u64 fast_draw_start = FastDraw::g_enabled ? Profile::Now() : 0;
+    const bool time_fast_draw = FastDraw::g_enabled && !Common::Nx2SampleProfile::Requested();
+    const u64 fast_draw_start = time_fast_draw ? Profile::Now() : 0;
     {
         Profile::Scope scope{Profile::Zone::FlushWork};
         FlushWork();
@@ -839,9 +841,11 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         if (path != DrawPath::Reused) {
             NoteResolvedDraw(pipeline, is_indexed, is_indirect);
         }
-        const size_t index = static_cast<size_t>(path);
-        fast_draw_stats.prepare_ns[index] += Profile::Now() - fast_draw_start;
-        ++fast_draw_stats.prepare_draws[index];
+        if (time_fast_draw) {
+            const size_t index = static_cast<size_t>(path);
+            fast_draw_stats.prepare_ns[index] += Profile::Now() - fast_draw_start;
+            ++fast_draw_stats.prepare_draws[index];
+        }
     }
     static u32 native_capture_count{};
     if (maxwell3d->GetNativeMacroEngine().native_turing &&
