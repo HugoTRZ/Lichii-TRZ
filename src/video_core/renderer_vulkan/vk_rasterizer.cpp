@@ -66,6 +66,7 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 #include "video_core/memory_manager.h"
 #include "video_core/nx2_debug_control.h"
+#include "video_core/nx2_draw_runs.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -1423,6 +1424,9 @@ void RasterizerVulkan::DispatchCompute() {
     if (InvalidateBeforeUse()) {
         gpu.InvalidateGPUCache();
     }
+    if (VideoCommon::Nx2DrawRuns::g_enabled) [[unlikely]] {
+        VideoCommon::Nx2DrawRuns::OnBreak(VideoCommon::Nx2DrawRuns::Break::Compute);
+    }
     FlushWork();
     gpu_memory->FlushCaching();
     if (frame_dump.Capturing()) {
@@ -2055,6 +2059,9 @@ void RasterizerVulkan::TickFrame() {
             VideoCore::Nx2Debug::FinishGpuRead(read->id,
                                                ReadGpuMemory(spaces, read->gpu_address, read->size));
         }
+    }
+    if (VideoCommon::Nx2DrawRuns::g_enabled) [[unlikely]] {
+        VideoCommon::Nx2DrawRuns::OnFrame();
     }
     frame_dump.TickFrame();
     ++render_trace_frame;
