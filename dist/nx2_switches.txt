@@ -64,3 +64,8 @@ EDEN_NX2_DYNAMIC_SKIP=1
 #EDEN_NX2_ASYNC_SKIP=1
 # Restore the depth clears Ocarina's water/shadow layer loses its depth to (dark blotches).
 #EDEN_NX2_KEEP_BLIT_DEPTH_CLEARS=1
+# Ocarina runs a frame ahead of the GPU (PR #161). =0 waits for each frame at present again,
+# if the game stutters back and forth or shows misdrawn frames.
+#EDEN_NX2_FRAMES_AHEAD=0
+# Skip the pipeline key refresh on draws whose pipeline registers did not change (PR #166).
+#EDEN_NX2_PIPELINE_CLEAN=1
