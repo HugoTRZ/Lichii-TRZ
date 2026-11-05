@@ -1087,16 +1087,20 @@ bool FrontVerifyEnabled() {
     return verify;
 }
 
-// EDEN_NX2_DMA_CB_RANGES=0: macro memory reads wait for every constant buffer upload queued.
+// EDEN_NX2_DMA_CB_RANGES=1: macro memory reads wait only for the constant buffer uploads (and
+// query reports) over the words they read. Off by default: Ocarina of Time's macros read the
+// occlusion results that decide which objects draw, and both #161 and zortos's split-overlap
+// audit found narrowed waits on these reads missing writers queued to pages not marked yet.
 bool CbRangesEnabled() {
     static const bool enabled = [] {
         const char* const value = std::getenv("EDEN_NX2_DMA_CB_RANGES");
-        return value == nullptr || value[0] != '0';
+        return value != nullptr && value[0] == '1';
     }();
     return enabled;
 }
 
-// EDEN_NX2_DMA_REPORT_RANGES=0: macro memory reads wait for every query report queued.
+// EDEN_NX2_DMA_REPORT_RANGES=0 (with EDEN_NX2_DMA_CB_RANGES=1): macro memory reads wait for
+// every query report queued.
 bool ReportRangesEnabled() {
     static const bool enabled = [] {
         const char* const value = std::getenv("EDEN_NX2_DMA_REPORT_RANGES");

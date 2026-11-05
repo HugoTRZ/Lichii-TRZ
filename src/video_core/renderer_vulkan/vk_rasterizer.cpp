@@ -2240,7 +2240,19 @@ void RasterizerVulkan::WaitForIdle() {
 }
 
 void RasterizerVulkan::FragmentBarrier() {
-    scheduler.DeferFragmentBarrier();
+    // #161 deferred the barrier to the next draw that reads the pass on every device. Outside
+    // MoltenVK that is opt-in again (EDEN_NX2_DEFER_FRAGMENT_BARRIER=1) while Ocarina of Time's
+    // white flicker after a scene change is narrowed down: this is the barrier Lichii always had.
+    static const bool defer = [] {
+        const char* value = std::getenv("EDEN_NX2_DEFER_FRAGMENT_BARRIER");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (device.IsMoltenVK() || defer) {
+        scheduler.DeferFragmentBarrier();
+        return;
+    }
+    // We already put barriers when a render pass finishes
+    scheduler.RequestOutsideRenderPassOperationContext();
 }
 
 void RasterizerVulkan::TiledCacheBarrier() {

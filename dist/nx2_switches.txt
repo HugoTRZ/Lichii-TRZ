@@ -64,8 +64,16 @@ EDEN_NX2_DYNAMIC_SKIP=1
 #EDEN_NX2_ASYNC_SKIP=1
 # Restore the depth clears Ocarina's water/shadow layer loses its depth to (dark blotches).
 #EDEN_NX2_KEEP_BLIT_DEPTH_CLEARS=1
-# Ocarina runs a frame ahead of the GPU (PR #161). =0 waits for each frame at present again,
-# if the game stutters back and forth or shows misdrawn frames.
-#EDEN_NX2_FRAMES_AHEAD=0
 # Skip the pipeline key refresh on draws whose pipeline registers did not change (PR #166).
 #EDEN_NX2_PIPELINE_CLEAN=1
+
+# Off by default since test build 7 (on in build 6, which flickered white after a scene change).
+# Turn one on at a time. Measured here: frames ahead no gain, the narrowed macro reads about
+# +7%; the deferred barrier was not measured on its own.
+# Run a frame ahead of the GPU at present (PR #161).
+#EDEN_NX2_FRAMES_AHEAD=1
+# Defer a fragment barrier to the next draw that reads the pass (PR #161).
+#EDEN_NX2_DEFER_FRAGMENT_BARRIER=1
+# Macro memory reads wait only for the constant buffer uploads and query reports over the words
+# they read (computererguy).
+#EDEN_NX2_DMA_CB_RANGES=1
