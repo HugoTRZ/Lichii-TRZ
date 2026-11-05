@@ -11,6 +11,7 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include "video_core/nx2_kick.h"
 #include "common/container/unordered_map.h"
 #include <utility>
 
@@ -282,7 +283,9 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     };
     u8* pointer = impl->device_memory.template GetPointer<u8>(cpu_addr);
     u8* pointer_timestamp = impl->device_memory.template GetPointer<u8>(cpu_addr + 8);
-    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? !Settings::IsGPULevelHigh() : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
+    const bool low_fences = !Settings::IsGPULevelHigh() &&
+                            !VideoCommon::Nx2AccurateSync(VideoCommon::Nx2Sync::FenceReports);
+    bool is_synced = (Settings::IsGPUFenceBehaviorDefault() ? low_fences : !Settings::IsGPUFenceBehaviorBalanced() && !Settings::IsGPUFenceBehaviorAccurate()) && is_fence;
     std::function<void()> operation([this, is_synced, streamer, query_base = query, query_location,
                                      pointer, pointer_timestamp, cpu_addr, addr,
                                      asid = gpu_memory->GetID(), counter_type] {
@@ -341,7 +344,8 @@ void QueryCacheBase<Traits>::CounterReport(GPUVAddr addr, QueryType counter_type
     if (is_fence) {
         impl->rasterizer.SignalFence(std::move(operation));
     } else {
-        if (!Settings::IsGPULevelHigh() && counter_type == QueryType::Payload) {
+        if (!Settings::IsGPULevelHigh() && !VideoCommon::Nx2AccurateSync(VideoCommon::Nx2Sync::Payloads) &&
+            counter_type == QueryType::Payload) {
             if (has_timestamp) {
                 u64 timestamp = impl->gpu.GetTicks();
                 u64 value = static_cast<u64>(payload);

@@ -84,6 +84,25 @@ void ReleaseFences(DmaPusher& dma_pusher) {
         VideoCommon::DrainSite::FenceRelease);
 }
 
+// Before suspending a channel on an acquire: put the pending releases behind a fence and go on
+// without waiting for the host GPU to reach it. The fencing thread runs them when it does, a
+// release that meets the value wakes the GPU thread (Nx2GpuKick) and the suspended channel
+// resumes. With accurate sync, waiting here (ReleaseFences) drained the host GPU at every such
+// acquire. EDEN_NX2_SYNC_ACQUIRE=1 waits as before.
+void ReleaseFencesForAcquire(DmaPusher& dma_pusher) {
+    static const bool sync = [] {
+        const char* value = std::getenv("EDEN_NX2_SYNC_ACQUIRE");
+        return value != nullptr && value[0] == '1';
+    }();
+    if (sync) {
+        ReleaseFences(dma_pusher);
+        return;
+    }
+    VideoCommon::GpuSplit::Get().Run(
+        [rasterizer = dma_pusher.rasterizer] { rasterizer->SignalReference(); },
+        VideoCommon::DrainSite::FenceRelease);
+}
+
 } // Anonymous namespace
 
 bool Puller::PendingAcquire::Matches(u32 current) const {
@@ -287,7 +306,7 @@ void Puller::ProcessSemaphoreTriggerMethod(DmaPusher& dma_pusher) {
         if (const auto device = dma_pusher.memory_manager.GpuToCpuAddress(acquire.address)) {
             waiters.Add(this, *device, acquire.value, acquire.operation);
         }
-        ReleaseFences(dma_pusher);
+        ReleaseFencesForAcquire(dma_pusher);
         if (!waiters.Latched(this) && !acquire.Matches(ReadSemaphoreWord(dma_pusher, acquire.address))) {
             pending_acquire = acquire;
             dma_pusher.suspensions.fetch_add(1, std::memory_order_release);

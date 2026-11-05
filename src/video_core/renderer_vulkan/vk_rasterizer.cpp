@@ -21,6 +21,8 @@
 
 #include <fmt/format.h>
 
+#include "video_core/nx2_kick.h"
+
 #include "video_core/renderer_vulkan/renderer_vulkan.h"
 
 #include "common/assert.h"
@@ -1560,7 +1562,7 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
             return true;
         }
     }
-    if (!Settings::IsGPULevelHigh()) {
+    if (!Settings::IsGPULevelHigh() && !VideoCommon::Nx2AccurateSync(VideoCommon::Nx2Sync::CpuReads)) {
         return false;
     }
     if (True(which & VideoCommon::CacheType::TextureCache)) {

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "common/common_types.h"
+#include "video_core/nx2_kick.h"
 
 namespace Tegra {
 
@@ -375,6 +376,7 @@ public:
         for (auto& w : waiters) {
             if (w.address == device_address && !w.latched && Matches(w, value)) {
                 w.latched = true;
+                VideoCommon::Nx2GpuKick().Set();
             }
         }
     }
