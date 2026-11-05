@@ -774,8 +774,12 @@ bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
         texture_cache.UpdateRenderTargets(false);
         const std::span<const VideoCommon::ImageViewInOut> view_span{views.data(), views.size()};
         texture_cache.CheckFeedbackLoop(view_span);
-        if (scheduler.TakeFragmentBarrier() &&
+        // Consume the deferred barrier only on the draw that needs it: taking it on an unrelated
+        // draw dropped it for the later draws that sample the pass (999sian 7c604d4cee, zortos
+        // 60e565c440).
+        if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
+            scheduler.TakeFragmentBarrier();
             scheduler.RequestOutsideRenderPassOperationContext();
         }
     }
@@ -849,8 +853,12 @@ GraphicsPipeline::DeltaResult GraphicsPipeline::ConfigureDelta() {
         texture_cache.UpdateRenderTargets(false);
         const std::span<const VideoCommon::ImageViewInOut> view_span{delta_views};
         texture_cache.CheckFeedbackLoop(view_span);
-        if (scheduler.TakeFragmentBarrier() &&
+        // Consume the deferred barrier only on the draw that needs it: taking it on an unrelated
+        // draw dropped it for the later draws that sample the pass (999sian 7c604d4cee, zortos
+        // 60e565c440).
+        if (scheduler.HasFragmentBarrier() &&
             (scheduler.RenderPassHasStores() || texture_cache.SamplesRenderTarget(view_span))) {
+            scheduler.TakeFragmentBarrier();
             scheduler.RequestOutsideRenderPassOperationContext();
         }
     }

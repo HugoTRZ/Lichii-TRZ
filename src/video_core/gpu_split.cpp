@@ -120,6 +120,7 @@ void GpuSplit::MaybeStart(Core::System& system_) {
     system = &system_;
     check_owner = std::getenv("EDEN_NX2_SPLIT_CHECK") != nullptr;
     ring = std::make_unique<u64[]>(RingWords);
+    back_exited.store(false, std::memory_order_release);
     back_thread = std::jthread([this](std::stop_token stop_token) { BackLoop(stop_token); });
     active = true;
     const char* jit = std::getenv("EDEN_NX2_MME_JIT");
@@ -208,11 +209,6 @@ bool GpuSplit::WaitForWriters(DrainSite site) {
     return WaitFor(std::min(last_writer_position, write_position), site);
 }
 
-bool GpuSplit::WaitForSyncedWriters(DrainSite site) {
-    FlushPending();
-    return WaitFor(std::min({last_writer_position, last_sync_position, write_position}), site);
-}
-
 bool GpuSplit::WaitForSync() {
     FlushPending();
     return WaitFor(std::min(last_sync_position, write_position), DrainSite::ListSync);
@@ -250,10 +246,12 @@ bool GpuSplit::WaitFor(u64 target, DrainSite site) {
         Pause();
     }
     front_waiting.store(true, std::memory_order_seq_cst);
-    while (back_running.load(std::memory_order_acquire)) {
+    // back_exited, not back_running: a wait sent before the back thread first ran returned at
+    // once (999sian, #161 7c604d4cee).
+    while (!back_exited.load(std::memory_order_acquire)) {
         const u32 seen = front_wake.load(std::memory_order_seq_cst);
         consumed_cache = consumed.load(std::memory_order_seq_cst);
-        if (consumed_cache >= target || !back_running.load(std::memory_order_seq_cst)) {
+        if (consumed_cache >= target || back_exited.load(std::memory_order_seq_cst)) {
             break;
         }
         front_wake.wait(seen, std::memory_order_seq_cst);
@@ -561,6 +559,7 @@ void GpuSplit::BackLoop(std::stop_token stop_token) {
         }
     }
     back_running.store(false, std::memory_order_seq_cst);
+    back_exited.store(true, std::memory_order_seq_cst);
     front_wake.fetch_add(1, std::memory_order_seq_cst);
     front_wake.notify_all();
 }

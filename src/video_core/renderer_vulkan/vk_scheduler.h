@@ -122,6 +122,12 @@ public:
         fragment_barrier_pending = state.renderpass != VK_NULL_HANDLE;
     }
 
+    /// Whether a deferred fragment barrier is pending on the active render pass.
+    [[nodiscard]] bool HasFragmentBarrier() const noexcept {
+        return fragment_barrier_pending;
+    }
+
+    /// Clears and returns the pending deferred fragment barrier.
     bool TakeFragmentBarrier() {
         return std::exchange(fragment_barrier_pending, false);
     }

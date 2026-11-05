@@ -183,9 +183,9 @@ public:
         last_writer_position = write_position;
     }
     /// Waits until the back executed the compute and copy work sent so far (not what came after).
+    /// Includes writers after NoteSync; page-written flags are not authoritative before this wait.
     /// Returns whether any of it was still queued.
     bool WaitForWriters(DrainSite site = DrainSite::ListWriters);
-    bool WaitForSyncedWriters(DrainSite site = DrainSite::ListWriters);
     /// A host-level wait was just sent (a syncpoint acquire, a host WFI, a GP entry with its sync
     /// bit; semaphore acquires drain): the guest's GPU work before it is complete before the
     /// commands after it are fetched.
@@ -375,6 +375,8 @@ private:
     void* idle_argument{};
     alignas(64) std::atomic<bool> hook_requested{};
     std::atomic<bool> back_running{};
+    /// True when no back thread runs or after BackLoop exits; cleared before the thread starts.
+    std::atomic<bool> back_exited{true};
 
     // 128 bytes: x86 spatial prefetchers pull 64-byte lines in pairs. back_waiting and wake are
     // always touched together by both threads, so they share a block.
