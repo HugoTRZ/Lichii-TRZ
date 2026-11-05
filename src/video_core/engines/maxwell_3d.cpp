@@ -1275,6 +1275,11 @@ void Maxwell3D::FrontWrite(VideoCommon::GpuSplit& split, FrontState& fs, u32 met
     } else {
         split.Method(this, method, argument, is_last_call, nullptr);
     }
+    if (method == MAXWELL3D_REG_INDEX(report_semaphore.query)) {
+        split.NoteSemaphoreWrite(
+            (GPUVAddr{fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_high)]} << 32) |
+            fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_low)]);
+    }
     if (cb_bytes != 0) {
         FrontNoteCbWrite(split, fs, memory_writes, FrontCbAddress(fs, cb_offset), cb_bytes);
     } else if (method == MAXWELL3D_REG_INDEX(report_semaphore.query) && ReportRangesEnabled()) {
@@ -1451,6 +1456,11 @@ void Maxwell3D::FrontCallMultiMethod(Core::System& system, VideoCommon::GpuSplit
     split.MultiMethod(this, method, base_start, amount, methods_pending, nullptr);
     if (cb_bytes != 0) {
         FrontNoteCbWrite(split, fs, memory_writes, FrontCbAddress(fs, cb_offset), cb_bytes);
+    }
+    if (method == MAXWELL3D_REG_INDEX(report_semaphore.query)) {
+        split.NoteSemaphoreWrite(
+            (GPUVAddr{fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_high)]} << 32) |
+            fs.regs[MAXWELL3D_REG_INDEX(report_semaphore.address_low)]);
     }
 }
 
