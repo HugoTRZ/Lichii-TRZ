@@ -14,6 +14,7 @@
 #include <filesystem>
 #include <tuple>
 #include <set>
+#include <span>
 #include <fstream>
 #include <mutex>
 #include <string_view>
@@ -62,6 +63,8 @@
 #include "video_core/texture_cache/texture_cache_base.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
+#include "video_core/memory_manager.h"
+#include "video_core/nx2_debug_control.h"
 #include "video_core/nx2_profile.h"
 
 namespace Vulkan {
@@ -72,6 +75,50 @@ using VideoCommon::ImageViewType;
 
 
 namespace {
+
+// EXPERIMENT EDEN_NX2_INVALIDATE_BEFORE_DISPATCH=1: apply collected guest CPU writes before every
+// dispatch and draw (=list does it once per command list, in DmaPusher).
+bool InvalidateBeforeUse() {
+    static const bool enabled = [] {
+        const char* value = std::getenv("EDEN_NX2_INVALIDATE_BEFORE_DISPATCH");
+        return value != nullptr && value[0] != '0' && std::string_view{value} != "list";
+    }();
+    return enabled;
+}
+
+/// read_gpu_memory: the first address space (the bound channel's first) that maps the whole range,
+/// read as the GPU reads it, without flushing GPU caches.
+VideoCore::Nx2Debug::GpuReadResult ReadGpuMemory(std::span<Tegra::MemoryManager* const> spaces,
+                                                 GPUVAddr address, u64 size) {
+    VideoCore::Nx2Debug::GpuReadResult result{};
+    if (spaces.empty()) {
+        result.error = "no GPU address space is bound yet";
+        return result;
+    }
+    for (Tegra::MemoryManager* const space : spaces) {
+        if (space->IsFullyMappedRange(address, size)) {
+            result.bytes.resize(size);
+            space->ReadBlockUnsafe(address, result.bytes.data(), size);
+            result.address_space = space->GetID();
+            return result;
+        }
+    }
+    constexpr u64 page_mask = 0xfff;
+    const GPUVAddr end = address + size;
+    GPUVAddr first = address;
+    while (first < end) {
+        const GPUVAddr next = (std::min)((first | page_mask) + 1, end);
+        if (!spaces.front()->IsFullyMappedRange(first, next - first)) {
+            break;
+        }
+        first = next;
+    }
+    result.error = fmt::format("GPU address {:#x} is not mapped (the first unmapped byte in the "
+                               "bound channel's address space; {} address spaces checked)",
+                               first, spaces.size());
+    return result;
+}
+
 struct DrawParams {
     u32 base_instance;
     u32 num_instances;
@@ -368,6 +415,9 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         }
     };
     namespace Profile = VideoCommon::Nx2Profile;
+    if (InvalidateBeforeUse()) {
+        gpu.InvalidateGPUCache();
+    }
     {
         Profile::Scope scope{Profile::Zone::FlushWork};
         FlushWork();
@@ -438,6 +488,7 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func, bool is_in
         return;
     }
 
+    TracePendingCpuWrites(false, pipeline->ShaderHashes());
     TraceRenderState(is_indexed, "configured", texture_cache.GetFramebuffer());
     if (frame_dump.Capturing()) {
         FrameDumpPass(texture_cache.GetFramebuffer());
@@ -1338,6 +1389,9 @@ void RasterizerVulkan::Clear(u32 layer_count) {
 
 void RasterizerVulkan::DispatchCompute() {
     VideoCommon::Nx2Profile::Scope profile_scope{VideoCommon::Nx2Profile::Zone::Compute};
+    if (InvalidateBeforeUse()) {
+        gpu.InvalidateGPUCache();
+    }
     FlushWork();
     gpu_memory->FlushCaching();
     if (frame_dump.Capturing()) {
@@ -1386,6 +1440,7 @@ void RasterizerVulkan::DispatchCompute() {
         }
         frame_dump.CaptureDispatch(pipeline->ShaderHash(), written);
     };
+    TracePendingCpuWrites(true, std::array{pipeline->ShaderHash()});
     if (frame_dump.CapturingSampled()) {
         boost::container::small_vector<FrameDump::Sampled, 16> sampled;
         for (const auto& image : pipeline->SampledImages()) {
@@ -1869,6 +1924,36 @@ void RasterizerVulkan::TraceRenderState(bool is_indexed, const char* outcome,
               static_cast<u32>(regs.render_enable_override));
 }
 
+void RasterizerVulkan::TracePendingCpuWrites(bool compute, std::span<const u64> shader_hashes) {
+    // Guest CPU writes into GPU-written buffer memory are collected, and applied to the host
+    // buffers only at the next fence or cache invalidation. A hit here reads the older bytes.
+    static const bool enabled = std::getenv("EDEN_NX2_PENDING_WRITE_TRACE") != nullptr;
+    if (!enabled) {
+        return;
+    }
+    static constexpr u64 max_lines = 100000;
+    static u64 lines{};
+    buffer_cache.ForEachBoundBuffer(compute, [&](u32 stage, bool storage, u32 index, bool written,
+                                                 const auto& binding, u32 bound_size,
+                                                 const auto*, u32) {
+        if (lines > max_lines || !gpu.HasPendingCPUWrites(binding.device_addr, bound_size)) {
+            return;
+        }
+        if (++lines > max_lines) {
+            LOG_INFO(HW_GPU, "Pending write trace stopped after {} lines", max_lines);
+            return;
+        }
+        const size_t program = compute ? 0 : stage + 1;
+        LOG_INFO(HW_GPU,
+                 "Pending CPU write frame={} {} shader={:016x} stage={} {}[{}]{} addr={:#x} "
+                 "device={:#x} size={:#x}",
+                 render_trace_frame, compute ? "dispatch" : "draw",
+                 program < shader_hashes.size() ? shader_hashes[program] : 0, stage,
+                 storage ? "ssbo" : "cbuf", index, written ? " written" : "", binding.gpu_addr,
+                 binding.device_addr, bound_size);
+    });
+}
+
 bool RasterizerVulkan::FrameDumpBuffers(bool compute, std::span<const u64> shader_hashes) {
     static constexpr u32 BUFFER_CAP = 4U << 20;
     std::vector<FrameDump::BoundBuffer> buffers;
@@ -1913,6 +1998,33 @@ void RasterizerVulkan::FrameDumpPass(const Framebuffer* framebuffer) {
 }
 
 void RasterizerVulkan::TickFrame() {
+    if (VideoCore::Nx2Debug::HasRequests()) {
+        if (auto capture = VideoCore::Nx2Debug::TakeCapture()) {
+            // This branch keeps fix/oot-fog's frame dump, which has no debug-server arming.
+            LOG_WARNING(Render_Vulkan, "Debug server frame capture {} is not supported here",
+                        capture->id);
+        }
+        if (const auto change = VideoCore::Nx2Debug::TakeRejectChange()) {
+            pipeline_cache.RefreshDebugRejections(change->unrejected);
+            VideoCore::Nx2Debug::NoteRejectApplied(change->generation);
+        }
+        while (const auto read = VideoCore::Nx2Debug::TakeGpuRead()) {
+            std::vector<Tegra::MemoryManager*> spaces;
+            if (gpu_memory != nullptr) {
+                spaces.push_back(gpu_memory);
+            }
+            {
+                std::scoped_lock lock{config_mutex};
+                for (const auto& [id, space] : address_spaces) {
+                    if (space.gpu_memory != gpu_memory) {
+                        spaces.push_back(space.gpu_memory);
+                    }
+                }
+            }
+            VideoCore::Nx2Debug::FinishGpuRead(read->id,
+                                               ReadGpuMemory(spaces, read->gpu_address, read->size));
+        }
+    }
     frame_dump.TickFrame();
     ++render_trace_frame;
     render_trace_draws = 0;

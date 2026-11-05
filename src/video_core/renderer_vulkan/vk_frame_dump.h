@@ -4,6 +4,7 @@
 
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <condition_variable>
 #include <deque>
 #include <filesystem>
@@ -38,6 +39,16 @@ class Scheduler;
 /// and the uniform and storage buffers of every draw and dispatch, once per shader and binding, with
 /// each dispatch's group counts. Readbacks are encoded and written on a worker thread so the
 /// capture does not stall the game.
+/// Whether pipelines keep the sampled textures of their draws and dispatches for the frame dump
+/// (EDEN_NX2_FRAME_DUMP_SAMPLED).
+[[nodiscard]] inline bool RecordingSampledTextures() noexcept {
+    static const bool record_sampled = [] {
+        const char* const value = std::getenv("EDEN_NX2_FRAME_DUMP_SAMPLED");
+        return value && *value != '\0' && *value != '0';
+    }();
+    return record_sampled;
+}
+
 class FrameDump {
 public:
     struct Sampled {

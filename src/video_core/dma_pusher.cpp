@@ -45,6 +45,19 @@ DmaPusher::DmaPusher(Core::System& system_, MemoryManager& memory_manager_, Cont
 DmaPusher::~DmaPusher() = default;
 
 void DmaPusher::DispatchCalls() {
+    // EXPERIMENT EDEN_NX2_INVALIDATE_BEFORE_DISPATCH=list: apply the guest's collected CPU writes
+    // before the submitted lists run; they were made before the submit.
+    static const bool invalidate_at_list = [] {
+        const char* value = std::getenv("EDEN_NX2_INVALIDATE_BEFORE_DISPATCH");
+        return value != nullptr && std::string_view{value} == "list";
+    }();
+    if (invalidate_at_list) {
+        if (auto& split = VideoCommon::GpuSplit::Get(); split.Active()) {
+            split.Defer([gpu = &system.GPU()] { gpu->InvalidateGPUCache(); });
+        } else {
+            system.GPU().InvalidateGPUCache();
+        }
+    }
     // The sub-index is kept: a channel suspended on a semaphore resumes inside its command list.
     dma_state.is_last_call = true;
     while (system.IsPoweredOn()) {
