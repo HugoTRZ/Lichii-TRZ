@@ -36,3 +36,28 @@ EDEN_NX2_FENCE_BATCH=1
 #EDEN_NX2_SPLIT_SKIP=1
 #EDEN_NX2_AUTO_STUB=1
 #EDEN_NX2_KEEP_ASTC=1
+
+# --- Ocarina of Time test build: on by default here ---
+# Keep every built graphics pipeline. Lichii evicts pipelines unused for 9000 frames, and
+# coming back to an area rebuilt hundreds of them on the GPU thread (2-3 s of freezes).
+EDEN_NX2_PIPELINE_EVICT_FRAMES=0
+
+# Experimental draw fast paths. Put a # in front of a line to turn it off if something renders
+# wrong; EDEN_NX2_FAST_DRAW_VERIFY=1 counts mismatches in the log.
+# Reuse an unchanged draw's bindings; 2 also takes draws that only change buffers or offsets.
+EDEN_NX2_FAST_DRAW=2
+# Skip vertex buffer lookups and upload scans for ranges nothing wrote since the last draw.
+EDEN_NX2_BUFFER_SKIP=1
+# Tell the texture, query and shader caches only about pages they hold something on.
+EDEN_NX2_INLINE_INVALIDATE=1
+# Skip dynamic state updates on draws that changed none.
+EDEN_NX2_DYNAMIC_SKIP=1
+
+# Off by default, for A/B tests:
+# Draw nothing while a pipeline builds instead of waiting for it (fewer freezes, missing
+# objects for a few frames).
+#EDEN_NX2_ASYNC_SKIP=1
+# Restore the depth clears Ocarina's water/shadow layer loses its depth to (dark blotches).
+#EDEN_NX2_KEEP_BLIT_DEPTH_CLEARS=1
+# Restore permanent preflushing of GPU-written pages the CPU reads.
+#EDEN_NX2_PREFLUSH=1
