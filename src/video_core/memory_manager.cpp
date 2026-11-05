@@ -641,26 +641,68 @@ size_t MemoryManager::MaxContinuousRange(GPUVAddr gpu_addr, size_t size) const {
         entry = {unique_identifier + 1, gpu_addr, size, serial, result};
         return result;
     }
-    // A run is followed this far from its page: past the 8 MiB storage bindings ask for.
-    constexpr size_t RunCap = size_t{16} << 20;
+    // A run is followed this far from its page: past the 64 MiB that Ocarina's object pools
+    // (table pointers) bind from anywhere in a 64 KiB page. With 16 MiB, those binds walked the
+    // page table each time: ~30% of the GPU back thread in Kokiri Forest.
+    static const size_t RunCap = [] {
+        const char* value = std::getenv("EDEN_NX2_RUN_CAP_MIB");
+        return (value == nullptr ? size_t{80} : static_cast<size_t>(std::strtoull(value, nullptr, 10)))
+               << 20;
+    }();
+    // EDEN_NX2_RUN_CACHE_STATS=1 logs refills and walks per million answers.
+    static const bool stats = std::getenv("EDEN_NX2_RUN_CACHE_STATS") != nullptr;
+    thread_local u64 stat_calls{}, stat_refills{}, stat_walks{};
     struct Run {
         size_t owner;
         GPUVAddr page;
         u64 serial;
+        GPUVAddr start;
         GPUVAddr end;
     };
-    thread_local std::array<Run, 1024> runs{};
+    thread_local std::array<Run, 4096> runs{};
     const GPUVAddr page = gpu_addr & ~big_page_mask;
     Run& run = runs[(page >> big_page_bits) % runs.size()];
-    if (run.owner != unique_identifier + 1 || run.page != page || run.serial != serial) {
-        run = {unique_identifier + 1, page, serial, page + MaxContinuousRangeUncached(page, RunCap)};
-    }
+    // The run through [start, end) is contiguous, so the run from any address in it ends at `end`
+    // too, unless the walk stopped at RunCap.
+    const auto covers = [&](const Run& r) {
+        return r.owner == unique_identifier + 1 && r.page == page && r.serial == serial &&
+               r.start <= gpu_addr && gpu_addr < r.end &&
+               (gpu_addr + size <= r.start + RunCap || r.end < r.start + RunCap);
+    };
     size_t result;
-    if (run.end > gpu_addr && (gpu_addr + size <= page + RunCap || run.end < page + RunCap)) {
-        // The run from the page start passes gpu_addr, so the run from gpu_addr ends there too.
+    if (covers(run)) {
         result = (std::min<size_t>)(size, run.end - gpu_addr);
     } else {
-        result = MaxContinuousRangeUncached(gpu_addr, size);
+        // From the page start, or else from the small page holding gpu_addr: Ocarina's object
+        // pools begin past the start of their 128 KiB page, which is unmapped before them, so
+        // the run from the page start was empty and every bind walked the pages.
+        ++stat_refills;
+        GPUVAddr start = page;
+        GPUVAddr end = page + MaxContinuousRangeUncached(page, RunCap);
+        if (end <= gpu_addr) {
+            start = gpu_addr & ~((GPUVAddr{1} << page_bits) - 1);
+            end = start + MaxContinuousRangeUncached(start, RunCap);
+        }
+        run = {unique_identifier + 1, page, serial, start, end};
+        if (covers(run)) {
+            result = (std::min<size_t>)(size, run.end - gpu_addr);
+        } else {
+            result = MaxContinuousRangeUncached(gpu_addr, size);
+            ++stat_walks;
+            static std::atomic<u32> walk_logs{};
+            if (stats && walk_logs.fetch_add(1, std::memory_order_relaxed) < 16) [[unlikely]] {
+                LOG_INFO(HW_GPU, "MaxContinuousRange walk: addr {:#x} size {:#x} run {:#x}-{:#x} "
+                                 "result {:#x}",
+                         gpu_addr, size, run.start, run.end, result);
+            }
+        }
+    }
+    if (stats && (++stat_calls & ((u64{1} << 20) - 1)) == 0) [[unlikely]] {
+        LOG_INFO(HW_GPU, "MaxContinuousRange: {} refills, {} walks in the last 2^20 answers "
+                         "(page table serial {})",
+                 stat_refills, stat_walks, serial);
+        stat_refills = 0;
+        stat_walks = 0;
     }
     if (mode == 2) [[unlikely]] {
         const size_t expected = MaxContinuousRangeUncached(gpu_addr, size);
