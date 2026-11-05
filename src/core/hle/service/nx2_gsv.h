@@ -2165,10 +2165,30 @@ private:
             const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_EVERY");
             return value != nullptr ? (std::max)(u64{1}, static_cast<u64>(std::strtoull(value, nullptr, 10))) : u64{120};
         }();
-        if (directory == nullptr || (m_presents % every) != 1 % every || m_capture_pending->exchange(true)) {
+        // EDEN_NX2_FRAME_CAPTURE_FROM=<present>: no captures before it. EDEN_NX2_FRAME_CAPTURE_SIZE=
+        // <w>x<h> (default 1280x720): small captures every frame cost little (flash counting).
+        static const u64 from = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_FROM");
+            return value != nullptr ? std::strtoull(value, nullptr, 10) : u64{0};
+        }();
+        static const std::pair<u32, u32> size = [] {
+            const char* value = std::getenv("EDEN_NX2_FRAME_CAPTURE_SIZE");
+            u32 w = 1280, h = 720;
+            if (value != nullptr) {
+                char* end{};
+                w = static_cast<u32>(std::strtoul(value, &end, 10));
+                h = *end == 'x' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 10)) : 0;
+                if (w == 0 || h == 0) {
+                    w = 1280, h = 720;
+                }
+            }
+            return std::pair{w, h};
+        }();
+        if (directory == nullptr || m_presents < from || (m_presents % every) != 1 % every ||
+            m_capture_pending->exchange(true)) {
             return;
         }
-        const auto layout = Layout::DefaultFrameLayout(1280, 720);
+        const auto layout = Layout::DefaultFrameLayout(size.first, size.second);
         auto pixels = std::make_shared<std::vector<u8>>(layout.width * layout.height * 4);
         const std::string path =
             fmt::format("{}/nx2-frame-{:05}.tga", directory, m_presents);
