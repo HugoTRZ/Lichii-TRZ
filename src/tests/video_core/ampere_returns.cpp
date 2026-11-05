@@ -61,6 +61,20 @@ TEST_CASE("Ampere callees can compare into predicates with an R0 link", "[video_
     REQUIRE(static_cast<bool>(LowerToMaxwell(code)));
 }
 
+TEST_CASE("Ampere scheduled links can return through an IMAD copy", "[video_core][ampere]") {
+    // Ocarina of Time's auto-exposure helper: the link setup is not next to the call, and the
+    // callee returns through IMAD.MOV.U32 R4, RZ, RZ, R14.
+    const std::array<Instruction, 6> code{{
+        {{0x000e7802, 0x30, 0x00000f00, 0}},
+        {{0x29267824, 0x20, 0x078e0226, 0}},
+        {{0x00007944, 0x10, 0x03c00000, 0}},
+        {{0x0000794d, 0, 0x03800000, 0}},
+        {{0xff047224, 0xff, 0x078e000e, 0}},
+        {{0x04007950, 0xffffffa0, 0x03c3ffff, 0}},
+    }};
+    REQUIRE(static_cast<bool>(LowerToMaxwell(code)));
+}
+
 TEST_CASE("Ampere callees reject a wide multiply over the link", "[video_core][ampere]") {
     // IMAD.WIDE.U32 R54:R55 writes the R55 link.
     const std::array<Instruction, 5> code{{
