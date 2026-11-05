@@ -1085,9 +1085,16 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const
     if (!use_asynchronous_shaders) {
         return pipeline;
     }
+    // EDEN_NX2_ASYNC_SKIP=1 lets native draws take the legacy heuristic as well, as Selevet
+    // Eglantine does (sylvieistaken/selevet-eglantine 8b076b1): no wait for the build, but a draw
+    // that fills a persistent resource can be lost.
+    static const bool skip_native = [] {
+        const char* const value = std::getenv("EDEN_NX2_ASYNC_SKIP");
+        return value != nullptr && value[0] == '1';
+    }();
     const auto& draw_state = maxwell3d->draw_manager.draw_state;
-    const bool discard = CanDiscardPendingDraw(maxwell3d->GetNativeMacroEngine().native_turing,
-                                              maxwell3d->regs.zeta_enable != 0,
+    const bool native = maxwell3d->GetNativeMacroEngine().native_turing && !skip_native;
+    const bool discard = CanDiscardPendingDraw(native, maxwell3d->regs.zeta_enable != 0,
                                               draw_state.draw_element_count,
                                               draw_state.draw_element_count);
     return discard ? nullptr : pipeline;
