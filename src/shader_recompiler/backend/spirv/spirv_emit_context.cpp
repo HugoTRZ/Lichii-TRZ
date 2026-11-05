@@ -983,7 +983,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
             const Id ssbo_offset{OpUConvert(U32[1], OpISub(U64, addr, ssbo_addr))};
             const Id ssbo_index{OpShiftRightLogical(U32[1], ssbo_offset, Const(shift))};
             const Id ssbo_pointer{OpAccessChain(element_pointer, ssbo_id, zero, ssbo_index)};
-            callback(ssbo_pointer);
+            callback(ssbo_pointer, ssbo_id, ssbo_index);
             AddLabel(else_label);
         }};
         if (info.native_global_bounds) {
@@ -1038,7 +1038,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
             return func_id;
         }
         define_body(ssbo_member, addr, element_pointer, shift,
-                    [&](Id ssbo_pointer) { OpReturnValue(OpLoad(type, ssbo_pointer)); });
+                    [&](Id ssbo_pointer, Id, Id) { OpReturnValue(OpLoad(type, ssbo_pointer)); });
         OpReturnValue(ConstantNull(type));
         OpFunctionEnd();
         return func_id;
@@ -1060,7 +1060,7 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
             OpFunctionEnd();
             return func_id;
         }
-        define_body(ssbo_member, addr, element_pointer, shift, [&](Id ssbo_pointer) {
+        define_body(ssbo_member, addr, element_pointer, shift, [&](Id ssbo_pointer, Id, Id) {
             OpStore(ssbo_pointer, data);
             OpReturn();
         });
@@ -1088,32 +1088,76 @@ void EmitContext::DefineGlobalMemoryFunctions(const IR::Program& program) {
         })) {
         return;
     }
-    for (const auto opcode : {IR::Opcode::GlobalAtomicIAdd32, IR::Opcode::GlobalAtomicUMax32}) {
-        if (!std::ranges::any_of(program.blocks, [opcode](const IR::Block* block) {
-                return std::ranges::any_of(block->Instructions(), [opcode](const IR::Inst& inst) {
-                    return inst.GetOpcode() == opcode;
-                });
-            })) {
+    // Atomics the storage buffer pass could not track take the same routing, with the operation on
+    // the routed word (INC, DEC and F32 add through their storage buffer CAS loops).
+    using enum GlobalAtomic;
+    const auto kind_of = [](IR::Opcode opcode) -> GlobalAtomic {
+        switch (opcode) {
+        case IR::Opcode::GlobalAtomicIAdd32: return IAdd;
+        case IR::Opcode::GlobalAtomicSMin32: return SMin;
+        case IR::Opcode::GlobalAtomicUMin32: return UMin;
+        case IR::Opcode::GlobalAtomicSMax32: return SMax;
+        case IR::Opcode::GlobalAtomicUMax32: return UMax;
+        case IR::Opcode::GlobalAtomicInc32: return Inc;
+        case IR::Opcode::GlobalAtomicDec32: return Dec;
+        case IR::Opcode::GlobalAtomicAnd32: return And;
+        case IR::Opcode::GlobalAtomicOr32: return Or;
+        case IR::Opcode::GlobalAtomicXor32: return Xor;
+        case IR::Opcode::GlobalAtomicExchange32: return Exchange;
+        case IR::Opcode::GlobalAtomicAddF32: return AddF32;
+        default: return Count;
+        }
+    };
+    std::array<bool, static_cast<size_t>(Count)> used{};
+    for (const IR::Block* const block : program.blocks) {
+        for (const IR::Inst& inst : block->Instructions()) {
+            if (const GlobalAtomic kind = kind_of(inst.GetOpcode()); kind != Count) {
+                used[static_cast<size_t>(kind)] = true;
+            }
+        }
+    }
+    const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
+    for (size_t index = 0; index < used.size(); ++index) {
+        const auto kind = static_cast<GlobalAtomic>(index);
+        const Id cas_loop{kind == Inc ? increment_cas_ssbo
+                          : kind == Dec ? decrement_cas_ssbo
+                          : kind == AddF32 ? f32_add_cas
+                                           : Id{}};
+        const bool needs_cas_loop{kind == Inc || kind == Dec || kind == AddF32};
+        if (!used[index] || (needs_cas_loop && !Sirit::ValidId(cas_loop))) {
             continue;
         }
-        const Id function_type{TypeFunction(U32[1], U64, U32[1])};
-        const Id function{OpFunction(U32[1], spv::FunctionControlMask::MaskNone, function_type)};
-        if (opcode == IR::Opcode::GlobalAtomicIAdd32) {
-            atomic_add_global_func_u32 = function;
-        } else {
-            atomic_umax_global_func_u32 = function;
-        }
+        const Id type{kind == AddF32 ? F32[1] : U32[1]};
+        const Id function{
+            OpFunction(type, spv::FunctionControlMask::MaskNone, TypeFunction(type, U64, type))};
         const Id address{OpFunctionParameter(U64)};
-        const Id value{OpFunctionParameter(U32[1])};
-        const Id scope{Const(static_cast<u32>(spv::Scope::Device))};
+        const Id value{OpFunctionParameter(type)};
         define_body(&StorageDefinitions::U32, address, storage_types.U32.element, 2,
-                    [&](Id pointer) {
-                        OpReturnValue(opcode == IR::Opcode::GlobalAtomicIAdd32
-                                          ? OpAtomicIAdd(U32[1], pointer, scope, u32_zero_value, value)
-                                          : OpAtomicUMax(U32[1], pointer, scope, u32_zero_value, value));
+                    [&](Id pointer, Id ssbo, Id word) {
+                        switch (kind) {
+                        case IAdd: OpReturnValue(OpAtomicIAdd(type, pointer, scope, zero, value)); break;
+                        case SMin: OpReturnValue(OpAtomicSMin(type, pointer, scope, zero, value)); break;
+                        case UMin: OpReturnValue(OpAtomicUMin(type, pointer, scope, zero, value)); break;
+                        case SMax: OpReturnValue(OpAtomicSMax(type, pointer, scope, zero, value)); break;
+                        case UMax: OpReturnValue(OpAtomicUMax(type, pointer, scope, zero, value)); break;
+                        case And: OpReturnValue(OpAtomicAnd(type, pointer, scope, zero, value)); break;
+                        case Or: OpReturnValue(OpAtomicOr(type, pointer, scope, zero, value)); break;
+                        case Xor: OpReturnValue(OpAtomicXor(type, pointer, scope, zero, value)); break;
+                        case Exchange:
+                            OpReturnValue(OpAtomicExchange(type, pointer, scope, zero, value));
+                            break;
+                        case Inc:
+                        case Dec:
+                        case AddF32:
+                            OpReturnValue(OpFunctionCall(type, cas_loop, word, value, ssbo));
+                            break;
+                        case Count:
+                            break;
+                        }
                     });
-        OpReturnValue(u32_zero_value);
+        OpReturnValue(ConstantNull(type));
         OpFunctionEnd();
+        global_atomic_funcs[index] = function;
     }
 }
 
