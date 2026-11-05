@@ -73,7 +73,7 @@ public:
     }
 
     [[nodiscard]] bool CapturingSampled() const noexcept {
-        return capturing && sampled;
+        return capturing && sampled && pass_index >= sampled_from_pass;
     }
 
     /// Reads back the textures of the current draw not yet seen in this pass. Returns true when
@@ -184,6 +184,7 @@ private:
 
     bool enabled{};
     bool sampled{};
+    u32 sampled_from_pass{}; ///< EDEN_NX2_FRAME_DUMP_SAMPLED_FROM: first pass whose inputs are read
     bool capturing{};
     bool done{};
     bool truncated{};

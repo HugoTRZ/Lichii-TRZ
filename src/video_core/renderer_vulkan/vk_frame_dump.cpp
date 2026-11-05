@@ -236,6 +236,10 @@ FrameDump::FrameDump(const Device& device_, MemoryAllocator& memory_allocator_,
     enabled = true;
     const char* const sampled_value = std::getenv("EDEN_NX2_FRAME_DUMP_SAMPLED");
     sampled = sampled_value && *sampled_value != '\0' && *sampled_value != '0';
+    // Inputs of earlier passes are skipped, so the late passes of a frame fit under the size cap.
+    if (const char* const from = std::getenv("EDEN_NX2_FRAME_DUMP_SAMPLED_FROM")) {
+        sampled_from_pass = static_cast<u32>(std::strtoul(from, nullptr, 10));
+    }
     directory = dir;
     start = std::chrono::steady_clock::now();
     const char* const at = std::getenv("EDEN_NX2_FRAME_DUMP_AT");
